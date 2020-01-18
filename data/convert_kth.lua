@@ -22,7 +22,7 @@ for _, class in pairs(classes) do
     print(vid)
     local fname = vid:sub(1,-12)
     os.execute(('mkdir -p %s/processed/%s/%s'):format(data_root, class, fname))
-    os.execute( ('~/tools/ffmpeg-git-20170417-32bit-static/ffmpeg -i %s/raw/%s/%s -r %d -f image2 -s %dx%d  %s/processed/%s/%s/image-%%03d_%dx%d.png'):format(data_root, class, vid, frame_rate, image_size, image_size, data_root, class, fname, image_size, image_size))
+    os.execute( ('ffmpeg -i %s/raw/%s/%s -r %d -f image2 -s %dx%d  %s/processed/%s/%s/image-%%03d_%dx%d.png'):format(data_root, class, vid, frame_rate, image_size, image_size, data_root, class, fname, image_size, image_size))
   end
 end
  

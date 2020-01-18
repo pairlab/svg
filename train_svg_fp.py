@@ -10,6 +10,7 @@ import utils
 import itertools
 import progressbar
 import numpy as np
+from torchsummary import summary
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--lr', default=0.002, type=float, help='learning rate')
@@ -291,6 +292,12 @@ def train(x):
     decoder_optimizer.step()
 
     return mse.data.cpu().numpy()/(opt.n_past+opt.n_future), kld.data.cpu().numpy()/(opt.n_future+opt.n_past)
+
+# -------- Torch Summary, comment out for running ------------
+
+# summary(encoder, input_size=(1, 64, 64))
+
+# exit()
 
 # --------- training loop ------------------------------------
 for epoch in range(opt.niter):
