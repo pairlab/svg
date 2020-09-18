@@ -60,6 +60,7 @@ prior.batch_size = opt.batch_size
 opt.g_dim = tmp['opt'].g_dim
 opt.z_dim = tmp['opt'].z_dim
 opt.num_digits = tmp['opt'].num_digits
+opt.action_space = tmp['opt'].action_space
 
 # --------- transfer to gpu ------------------------------------
 frame_predictor.cuda()
@@ -95,27 +96,32 @@ test_loader = DataLoader(test_data,
 
 def get_training_batch():
     while True:
-        for sequence in train_loader:
+        for item in train_loader:
+            sequence, action = item
             batch = utils.normalize_data(opt, dtype, sequence)
-            yield batch
+            yield batch, action
 training_batch_generator = get_training_batch()
 
 def get_testing_batch():
     while True:
-        for sequence in test_loader:
+        for item in test_loader:
+            sequence, action = item
             batch = utils.normalize_data(opt, dtype, sequence)
-            yield batch 
+            yield batch, action
 testing_batch_generator = get_testing_batch()
 
 # --------- eval funtions ------------------------------------
 
-def make_gifs(x, idx, name):
+def make_gifs(x, idx, name, action, action_indx):
     # get approx posterior sample
     frame_predictor.hidden = frame_predictor.init_hidden()
     posterior.hidden = posterior.init_hidden()
     posterior_gen = []
     posterior_gen.append(x[0])
     x_in = x[0]
+
+    action = action.cuda()
+
     for i in range(1, opt.n_eval):
         h = encoder(x_in)
         h_target = encoder(x[i])[0].detach()
@@ -126,11 +132,11 @@ def make_gifs(x, idx, name):
         h = h.detach()
         _, z_t, _= posterior(h_target) # take the mean
         if i < opt.n_past:
-            frame_predictor(torch.cat([h, z_t], 1)) 
+            frame_predictor(torch.cat([h, z_t, action], 1)) 
             posterior_gen.append(x[i])
             x_in = x[i]
         else:
-            h_pred = frame_predictor(torch.cat([h, z_t], 1)).detach()
+            h_pred = frame_predictor(torch.cat([h, z_t, action], 1)).detach()
             x_in = decoder([h_pred, skip]).detach()
             posterior_gen.append(x_in)
 
@@ -140,6 +146,7 @@ def make_gifs(x, idx, name):
     psnr = np.zeros((opt.batch_size, nsample, opt.n_future))
     progress = progressbar.ProgressBar(max_value=nsample).start()
     all_gen = []
+
     for s in range(nsample):
         progress.update(s+1)
         gen_seq = []
@@ -161,17 +168,50 @@ def make_gifs(x, idx, name):
                 h_target = encoder(x[i])[0].detach()
                 z_t, _, _ = posterior(h_target)
                 prior(h)
-                frame_predictor(torch.cat([h, z_t], 1))
+                frame_predictor(torch.cat([h, z_t, action], 1))
                 x_in = x[i]
                 all_gen[s].append(x_in)
             else:
                 z_t, _, _ = prior(h)
-                h = frame_predictor(torch.cat([h, z_t], 1)).detach()
+                h = frame_predictor(torch.cat([h, z_t, action], 1)).detach()
                 x_in = decoder([h, skip]).detach()
                 gen_seq.append(x_in.data.cpu().numpy())
                 gt_seq.append(x[i].data.cpu().numpy())
                 all_gen[s].append(x_in)
         mse[:, s, :], ssim[:, s, :], psnr[:, s, :] = utils.eval_seq(gt_seq, gen_seq)
+    
+    action_gen = []
+
+    for a in range(opt.action_space):
+        new_action = torch.zeros_like(action)
+        new_action[a] = 1
+
+        frame_predictor.hidden = frame_predictor.init_hidden()
+        posterior.hidden = posterior.init_hidden()
+        prior.hidden = prior.init_hidden()
+        x_in = x[0]
+        action_gen.append([])
+        action_gen[a].append(x_in)
+
+        for i in range(1, opt.n_eval):
+            h = encoder(x_in)
+            if opt.last_frame_skip or i < opt.n_past:	
+                h, skip = h
+            else:
+                h, _ = h
+            h = h.detach()
+            if i < opt.n_past:
+                h_target = encoder(x[i])[0].detach()
+                z_t, _, _ = posterior(h_target)
+                prior(h)
+                frame_predictor(torch.cat([h, z_t, new_action], 1))
+                x_in = x[i]
+                action_gen[a].append(x_in)
+            else:
+                z_t, _, _ = prior(h)
+                h = frame_predictor(torch.cat([h, z_t, new_action], 1)).detach()
+                x_in = decoder([h, skip]).detach()
+                action_gen[a].append(x_in)
 
     progress.finish()
     utils.clear_progressbar()
@@ -190,7 +230,7 @@ def make_gifs(x, idx, name):
         for t in range(opt.n_eval):
             # gt 
             gifs[t].append(add_border(x[t][i], 'green'))
-            text[t].append('Ground\ntruth')
+            text[t].append("Ground\ntruth ({})".format(action_indx[i]))
             #posterior 
             if t < opt.n_past:
                 color = 'green'
@@ -205,11 +245,15 @@ def make_gifs(x, idx, name):
                 color = 'red'
             sidx = ordered[-1]
             gifs[t].append(add_border(all_gen[sidx][t][i], color))
-            text[t].append('Best SSIM: {:.5f}'.format(mean_ssim[sidx]))
+            text[t].append('Best SSIM: \n {:.5f}'.format(mean_ssim[sidx]))
             # random 3
             for s in range(len(rand_sidx)):
                 gifs[t].append(add_border(all_gen[rand_sidx[s]][t][i], color))
                 text[t].append('Random\nsample %d' % (s+1))
+            
+            for a in range(opt.action_space):
+                gifs[t].append(add_border(action_gen[a][t][i], color))
+                text[t].append('Action\nsample %d' % (a))
 
         fname = '%s/%s_%d.gif' % (opt.log_dir, name, idx+i) 
         utils.save_gif_with_text(fname, gifs, text)
@@ -258,8 +302,16 @@ for i in range(len(test_loader)):
     # make_gifs(train_x, i, 'train')
 
     # plot test
-    test_x = next(testing_batch_generator)
-    abm, abss, abp = make_gifs(test_x, i, 'test')
+    test_x, action = next(testing_batch_generator)
+
+    action_indx = []
+    for j in range(len(action)):
+        for a in range(len(action[j])):
+            if action[j][a] == 1:
+                action_indx.append(a)
+                continue
+
+    abm, abss, abp = make_gifs(test_x, i, 'test', action, action_indx)
 
     avg_best_mse += abm/len(test_loader)
     avg_best_ssim += abss/len(test_loader)

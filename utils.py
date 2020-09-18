@@ -21,6 +21,8 @@ from torchvision import datasets, transforms
 from torch.autograd import Variable
 import imageio
 
+import pdb
+
 
 hostname = socket.gethostname()
 
@@ -65,14 +67,70 @@ def load_dataset(opt):
                 data_root=opt.data_root,
                 seq_len=opt.n_eval, 
                 image_size=opt.image_width)
-    
+    elif opt.dataset == '50salads':
+        from data._50salads import _50Salads 
+        train_data = _50Salads(
+                train=True, 
+                data_root=opt.data_root,
+                seq_len=opt.n_past+opt.n_future,
+                annotations_file = opt.annotations_file,
+                max_dataset_size = opt.max_dataset_size,
+                seq_skip = opt.seq_skip,
+                image_size=opt.image_width)
+        test_data = _50Salads(
+                train=False, 
+                data_root=opt.data_root,
+                seq_len=opt.n_eval, 
+                annotations_file = opt.annotations_file,
+                max_dataset_size = opt.max_dataset_size,
+                seq_skip = opt.seq_skip,
+                image_size=opt.image_width)
+    elif opt.dataset == '50salads_cond':
+        from data._50salads_cond import _50SaladsConditional
+        train_data = _50SaladsConditional(
+                train=True, 
+                data_root=opt.data_root,
+                seq_len=opt.n_past+opt.n_future,
+                annotations_file = opt.annotations_file,
+                max_dataset_size = opt.max_dataset_size,
+                seq_skip = opt.seq_skip,
+                image_size=opt.image_width)
+        test_data = _50SaladsConditional(
+                train=False, 
+                data_root=opt.data_root,
+                seq_len=opt.n_eval, 
+                annotations_file = opt.annotations_file,
+                max_dataset_size = opt.max_dataset_size,
+                seq_skip = opt.seq_skip,
+                image_size=opt.image_width)
+    elif opt.dataset == 'utd_actions':
+        from data.act import ACT
+        train_data = ACT(
+            train = True,
+            seq_len=opt.n_past+opt.n_future,
+            valid_actions = opt.valid_actions,
+            image_size = opt.image_width,
+            action_repr = opt.action_repr,
+            batch_size = opt.batch_size,
+            action_size = opt.action_space
+        )
+        test_data = ACT(
+            train = False,
+            seq_len=opt.n_past+opt.n_future,
+            valid_actions = opt.valid_actions,
+            image_size = opt.image_width,
+            action_repr = opt.action_repr,
+            batch_size = opt.batch_size,
+            action_size = opt.action_space
+        )
     return train_data, test_data
 
 def sequence_input(seq, dtype):
     return [Variable(x.type(dtype)) for x in seq]
 
 def normalize_data(opt, dtype, sequence):
-    if opt.dataset == 'smmnist' or opt.dataset == 'kth' or opt.dataset == 'bair' :
+    if opt.dataset == 'smmnist' or opt.dataset == 'kth' or opt.dataset == 'bair' or \
+    opt.dataset == '50salads' or opt.dataset == '50salads_cond' or opt.dataset == 'utd_actions':
         sequence.transpose_(0, 1)
         sequence.transpose_(3, 4).transpose_(2, 3)
     else:
@@ -138,19 +196,21 @@ def image_tensor(inputs, padding=1):
 def save_np_img(fname, x):
     if x.shape[0] == 1:
         x = np.tile(x, (3, 1, 1))
-    img = scipy.misc.toimage(x,
-                             high=255*x.max(),
-                             channel_axis=0)
+#    img = scipy.misc.toimage(x,
+#                             high=255*x.max(),
+#                             channel_axis=0)
+    img = Image.fromarray(x)
     img.save(fname)
 
 def make_image(tensor):
     tensor = tensor.cpu().clamp(0, 1)
     if tensor.size(0) == 1:
         tensor = tensor.expand(3, tensor.size(1), tensor.size(2))
-    # pdb.set_trace()
-    return scipy.misc.toimage(tensor.numpy(),
-                              high=255*tensor.max(),
-                              channel_axis=0)
+#    pdb.set_trace()
+#    return scipy.misc.toimage(tensor.numpy(),
+#                              high=255*tensor.max(),
+#                              channel_axis=0)
+    return Image.fromarray(np.transpose((tensor.numpy() * 255).astype('uint8'), (1, 2, 0)))
 
 def draw_text_tensor(tensor, text):
     np_x = tensor.transpose(0, 1).transpose(1, 2).data.cpu().numpy()
@@ -166,7 +226,7 @@ def save_gif(filename, inputs, duration=0.25):
         img = image_tensor(tensor, padding=0)
         img = img.cpu()
         img = img.transpose(0,1).transpose(1,2).clamp(0,1)
-        images.append(img.numpy())
+        images.append((img.numpy()*255).astype(np.uint8))
     imageio.mimsave(filename, images, duration=duration)
 
 def save_gif_with_text(filename, inputs, text, duration=0.25):
@@ -174,7 +234,7 @@ def save_gif_with_text(filename, inputs, text, duration=0.25):
     for tensor, text in zip(inputs, text):
         img = image_tensor([draw_text_tensor(ti, texti) for ti, texti in zip(tensor, text)], padding=0)
         img = img.cpu()
-        img = img.transpose(0,1).transpose(1,2).clamp(0,1).numpy()
+        img = (img.transpose(0,1).transpose(1,2).clamp(0,1).numpy()*255).astype(np.uint8)
         images.append(img)
     imageio.mimsave(filename, images, duration=duration)
 
@@ -214,8 +274,8 @@ def eval_seq(gt, pred):
     for i in range(bs):
         for t in range(T):
             for c in range(gt[t][i].shape[0]):
-                ssim[i, t] += ssim_metric(gt[t][i][c], pred[t][i][c])
-                psnr[i, t] += psnr_metric(gt[t][i][c], pred[t][i][c])
+                ssim[i, t] += ssim_metric(gt[t][i][c], pred[t][i][c], data_range = 1)
+                psnr[i, t] += psnr_metric(gt[t][i][c], pred[t][i][c], data_range = 1)
             ssim[i, t] /= gt[t][i].shape[0]
             psnr[i, t] /= gt[t][i].shape[0]
             mse[i, t] = mse_metric(gt[t][i], pred[t][i])

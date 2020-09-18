@@ -35,7 +35,7 @@ class lstm(nn.Module):
         return self.output(h_in)
 
 class gaussian_lstm(nn.Module):
-    def __init__(self, input_size, output_size, hidden_size, n_layers, batch_size):
+    def __init__(self, input_size, output_size, hidden_size, n_layers, batch_size, deterministic = False):
         super(gaussian_lstm, self).__init__()
         self.input_size = input_size
         self.output_size = output_size
@@ -48,6 +48,8 @@ class gaussian_lstm(nn.Module):
         self.logvar_net = nn.Linear(hidden_size, output_size)
         self.hidden = self.init_hidden()
 
+        self.deterministic = deterministic
+
     def init_hidden(self):
         hidden = []
         for i in range(self.n_layers):
@@ -57,7 +59,11 @@ class gaussian_lstm(nn.Module):
 
     def reparameterize(self, mu, logvar):
         logvar = logvar.mul(0.5).exp_()
-        eps = Variable(logvar.data.new(logvar.size()).normal_())
+
+        if self.deterministic:
+            eps = Variable(logvar.data.new(logvar.size()).zero_())
+        else:
+            eps = Variable(logvar.data.new(logvar.size()).normal_())
         return eps.mul(logvar).add_(mu)
 
     def forward(self, input):
